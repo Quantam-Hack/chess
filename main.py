@@ -1,4 +1,7 @@
+
 import pygame
+import random
+
 print(pygame.__version__)
 
 # Constants
@@ -24,6 +27,8 @@ def load_images():
 WHITE = (240, 240, 240)
 GRAY = (100, 100, 100)
 SELECTED_BORDER_COLOR = (255, 0, 0)  # Red for selected pieces
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
 
 pygame.init()
 WIN = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -43,48 +48,50 @@ board = [
 selected_piece = None
 selected_pos = None
 turn = 'white'
+quantum_mode = False
+quantum_moves = []
+quantum_piece = None
+quantum_positions = []
+
+quantum_board = {}  # {(r, c): [(piece, color), ...]} for superposed states
+
 
 def get_square_from_pos(x, y):
     return y // SQUARE_SIZE, x // SQUARE_SIZE
 
 def highlight_moves(win, moves):
     for move in moves:
-        pygame.draw.rect(win, (0, 255, 0), (move[1] * SQUARE_SIZE, move[0] * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE), 5)
+        pygame.draw.rect(win, GREEN, (move[1] * SQUARE_SIZE, move[0] * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE), 5)
 
 def get_possible_moves(piece, row, col):
     moves = []
+    color = piece[0]
+    opponent = 'b' if color == 'w' else 'w'
 
-    if piece == "wp":
-        if row > 0 and board[row - 1][col] == "":
-            moves.append((row - 1, col))
-        if row == 6 and board[row - 2][col] == "" and board[row - 1][col] == "":
-            moves.append((row - 2, col))
-        if row > 0 and col > 0 and board[row - 1][col - 1] != "" and board[row - 1][col - 1][0] == 'b':
-            moves.append((row - 1, col - 1))
-        if row > 0 and col < 7 and board[row - 1][col + 1] != "" and board[row - 1][col + 1][0] == 'b':
-            moves.append((row - 1, col + 1))
+    if piece[1] == 'p':
+        direction = -1 if color == 'w' else 1
+        start_row = 6 if color == 'w' else 1
+        if 0 <= row + direction < 8 and board[row + direction][col] == "":
+            moves.append((row + direction, col))
+        if row == start_row and board[row + direction][col] == "" and board[row + 2 * direction][col] == "":
+            moves.append((row + 2 * direction, col))
+        for dc in [-1, 1]:
+            nr, nc = row + direction, col + dc
+            if 0 <= nr < 8 and 0 <= nc < 8:
+                if board[nr][nc] != "" and board[nr][nc][0] == opponent:
+                    moves.append((nr, nc))
 
-    elif piece == "bp":
-        if row < 7 and board[row + 1][col] == "":
-            moves.append((row + 1, col))
-        if row == 1 and board[row + 2][col] == "" and board[row + 1][col] == "":
-            moves.append((row + 2, col))
-        if row < 7 and col > 0 and board[row + 1][col - 1] != "" and board[row + 1][col - 1][0] == 'w':
-            moves.append((row + 1, col - 1))
-        if row < 7 and col < 7 and board[row + 1][col + 1] != "" and board[row + 1][col + 1][0] == 'w':
-            moves.append((row + 1, col + 1))
-
-    elif piece in ["wr", "br"]:
+    elif piece[1] == 'r':
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         for dr, dc in directions:
             r, c = row, col
             while True:
                 r += dr
                 c += dc
-                if 0 <= r < ROWS and 0 <= c < COLS:
+                if 0 <= r < 8 and 0 <= c < 8:
                     if board[r][c] == "":
                         moves.append((r, c))
-                    elif board[r][c][0] != piece[0]:
+                    elif board[r][c][0] == opponent:
                         moves.append((r, c))
                         break
                     else:
@@ -92,17 +99,17 @@ def get_possible_moves(piece, row, col):
                 else:
                     break
 
-    elif piece in ["wb", "bb"]:
+    elif piece[1] == 'b':
         directions = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
         for dr, dc in directions:
             r, c = row, col
             while True:
                 r += dr
                 c += dc
-                if 0 <= r < ROWS and 0 <= c < COLS:
+                if 0 <= r < 8 and 0 <= c < 8:
                     if board[r][c] == "":
                         moves.append((r, c))
-                    elif board[r][c][0] != piece[0]:
+                    elif board[r][c][0] == opponent:
                         moves.append((r, c))
                         break
                     else:
@@ -110,145 +117,246 @@ def get_possible_moves(piece, row, col):
                 else:
                     break
 
-    elif piece in ["wq", "bq"]:
-        moves.extend(get_possible_moves(piece[0] + "r", row, col))
-        moves.extend(get_possible_moves(piece[0] + "b", row, col))
+    elif piece[1] == 'q':
+        moves.extend(get_possible_moves(color + 'r', row, col))
+        moves.extend(get_possible_moves(color + 'b', row, col))
 
-    elif piece in ["wn", "bn"]:
-        directions = [(-2, -1), (-2, 1), (2, -1), (2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2)]
-        for dr, dc in directions:
+    elif piece[1] == 'n':
+        deltas = [(-2, -1), (-2, 1), (2, -1), (2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2)]
+        for dr, dc in deltas:
             r, c = row + dr, col + dc
-            if 0 <= r < ROWS and 0 <= c < COLS:
-                if board[r][c] == "" or board[r][c][0] != piece[0]:
+            if 0 <= r < 8 and 0 <= c < 8:
+                if board[r][c] == "" or board[r][c][0] == opponent:
                     moves.append((r, c))
 
-    elif piece in ["wk", "bk"]:
+    elif piece[1] == 'k':
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
         for dr, dc in directions:
             r, c = row + dr, col + dc
-            if 0 <= r < ROWS and 0 <= c < COLS:
-                if board[r][c] == "" or board[r][c][0] != piece[0]:
+            if 0 <= r < 8 and 0 <= c < 8:
+                if board[r][c] == "" or board[r][c][0] == opponent:
                     moves.append((r, c))
 
     return moves
 
-def draw_board(win, board):
+# (The beginning remains unchanged up to draw_board...)
+
+def draw_instructions(win):
+    font = pygame.font.SysFont("Arial", 28, bold=True)
+    instructions = [
+        "Press ENTER to start playing",
+        "Press Q to enter quantum mode",
+        "In quantum mode, click two possible moves",
+        "Press M to collapse to one location"
+    ]
+    
+    total_height = len(instructions) * 40
+    start_y = (HEIGHT - total_height) // 2  # Center vertically
+
+    for i, line in enumerate(instructions):
+        text = font.render(line, True, (0, 0, 0))  # ⬛ Black text
+        text_rect = text.get_rect(center=(WIDTH // 2, start_y + i * 40))  # Center horizontally
+        win.blit(text, text_rect)
+
+
+def draw_board(win, board, show_instructions=False):
     win.fill(WHITE)
     for row in range(ROWS):
         for col in range(COLS):
             if (row + col) % 2 == 1:
                 pygame.draw.rect(win, GRAY, (col * SQUARE_SIZE, row * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE))
 
-            piece = board[row][col]
-            if piece != "":
-                win.blit(PIECE_IMAGES[piece], (col * SQUARE_SIZE, row * SQUARE_SIZE))
+            if (row, col) in quantum_board:
+                for piece in quantum_board[(row, col)]:
+                    ghost_surface = PIECE_IMAGES[piece].copy()
+                    ghost_surface.set_alpha(128)  # 👻 Transparent piece
+                    win.blit(ghost_surface, (col * SQUARE_SIZE, row * SQUARE_SIZE))
+            elif board[row][col] != "":
+                win.blit(PIECE_IMAGES[board[row][col]], (col * SQUARE_SIZE, row * SQUARE_SIZE))
 
             if selected_pos == (row, col):
                 pygame.draw.rect(win, SELECTED_BORDER_COLOR, (col * SQUARE_SIZE, row * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE), 5)
 
-def find_king(color):
-    for r in range(ROWS):
-        for c in range(COLS):
-            piece = board[r][c]
-            if piece == f"{color[0]}k":
-                return r, c
-    return None
+    if show_instructions:
+        draw_instructions(win)
 
-def is_king_in_check(color):
-    king_pos = find_king(color)
-    if not king_pos:
-        return False
-    for r in range(ROWS):
-        for c in range(COLS):
-            piece = board[r][c]
-            if piece != "" and piece[0] != color[0]:
-                moves = get_possible_moves(piece, r, c)
+    if quantum_mode:  # 🔮 Show quantum banner
+        font = pygame.font.SysFont("Arial", 24, bold=True)
+        text = font.render("Quantum Mode Active", True, (0, 0, 255))
+        win.blit(text, (WIDTH // 2 - text.get_width() // 2, HEIGHT - 30))
+
+    
+
+def is_in_check(color):
+    king_pos = None
+    opponent_color = 'b' if color == 'w' else 'w'
+    for r in range(8):
+        for c in range(8):
+            if board[r][c] == color + 'k':
+                king_pos = (r, c)
+                break
+        if king_pos:
+            break
+
+    for r in range(8):
+        for c in range(8):
+            if board[r][c] != '' and board[r][c][0] == opponent_color:
+                moves = get_possible_moves(board[r][c], r, c)
                 if king_pos in moves:
                     return True
     return False
 
-def has_legal_moves(color):
-    for r in range(ROWS):
-        for c in range(COLS):
-            piece = board[r][c]
-            if piece != "" and piece[0] == color[0]:
-                moves = get_possible_moves(piece, r, c)
+def has_any_moves(color):
+    for r in range(8):
+        for c in range(8):
+            if board[r][c] != '' and board[r][c][0] == color:
+                moves = get_possible_moves(board[r][c], r, c)
                 for move in moves:
-                    orig_piece = board[move[0]][move[1]]
-                    board[move[0]][move[1]] = piece
-                    board[r][c] = ""
-                    in_check = is_king_in_check(color)
-                    board[r][c] = piece
-                    board[move[0]][move[1]] = orig_piece
+                    # Try the move
+                    saved = board[move[0]][move[1]]
+                    board[move[0]][move[1]] = board[r][c]
+                    board[r][c] = ''
+                    in_check = is_in_check(color)
+                    board[r][c] = board[move[0]][move[1]]
+                    board[move[0]][move[1]] = saved
                     if not in_check:
                         return True
     return False
 
-def draw_end_message(text):
-    font = pygame.font.SysFont(None, 64)
-    msg_surface = font.render(text, True, (255, 0, 0))
-    rect = msg_surface.get_rect(center=(WIDTH // 2, HEIGHT // 2))
-    WIN.blit(msg_surface, rect)
+def show_message(win, text):
+    font = pygame.font.SysFont("Arial", 40, bold=True)
+    surface = font.render(text, True, (255, 0, 0))
+    rect = surface.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+    win.blit(surface, rect)
     pygame.display.update()
-    pygame.time.delay(3000)
+    pygame.time.wait(3000)
 
 def main():
-    global selected_piece, selected_pos, turn
+    global selected_piece, selected_pos, turn, quantum_mode, quantum_moves, quantum_piece, quantum_positions
     run = True
     clock = pygame.time.Clock()
     load_images()
+    game_started = False
 
     while run:
         clock.tick(60)
-        draw_board(WIN, board)
-
-        if selected_piece:
+        draw_board(WIN, board, show_instructions=not game_started)
+        if game_started and selected_piece:
             moves = get_possible_moves(selected_piece, selected_pos[0], selected_pos[1])
             highlight_moves(WIN, moves)
 
-        # Display "Check!" if king is under threat
-        if is_king_in_check(turn):
-            font = pygame.font.SysFont(None, 48)
-            check_surface = font.render("Check!", True, (255, 0, 0))
-            WIN.blit(check_surface, (WIDTH // 2 - 60, HEIGHT - 40))
+        if game_started:
+            # 🛡 Check if a king has been removed from the board
+            white_king_exists = any(board[r][c] == 'wk' for r in range(8) for c in range(8))
+            black_king_exists = any(board[r][c] == 'bk' for r in range(8) for c in range(8))
+
+            if not white_king_exists:
+                show_message(WIN, "Black Wins!")
+                pygame.time.wait(3000)
+                run = False
+                continue
+            elif not black_king_exists:
+                show_message(WIN, "White Wins!")
+                pygame.time.wait(3000)
+                run = False
+                continue
+
+            # ♟ Classic check/checkmate logic
+            if is_in_check('w'):
+                if not has_any_moves('w'):
+                    show_message(WIN, "Black Wins!")
+                    pygame.time.wait(3000)
+                    run = False
+                elif selected_piece is None:
+                    show_message(WIN, "White King in Check!")
+            elif is_in_check('b'):
+                if not has_any_moves('b'):
+                    show_message(WIN, "White Wins!")
+                    pygame.time.wait(3000)
+                    run = False
+                elif selected_piece is None:
+                    show_message(WIN, "Black King in Check!")
+
+
 
         pygame.display.update()
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 run = False
+            elif event.type == pygame.KEYDOWN:
+                if not game_started and event.key == pygame.K_RETURN:
+                    game_started = True
+                elif event.key == pygame.K_q:
+                    quantum_mode = not quantum_mode
+                    if not quantum_mode:
+                        quantum_moves = []
+                        quantum_piece = None
+                        quantum_positions = []
+                        selected_piece = None
+                        selected_pos = None
+                elif event.key == pygame.K_m and quantum_piece and len(quantum_positions) == 2:
+                    chosen = random.choice(quantum_positions)
+                    board[chosen[0]][chosen[1]] = quantum_piece
+                    for pos in quantum_positions:
+                        if pos != chosen:
+                            board[pos[0]][pos[1]] = ""
+                        if pos in quantum_board:
+                            del quantum_board[pos]
+                    quantum_piece = None
+                    quantum_positions = []
+                    selected_piece = None
+                    quantum_mode = False
+                    turn = 'black' if turn == 'white' else 'white'
+
             elif event.type == pygame.MOUSEBUTTONDOWN:
+                if not game_started:
+                    continue
+
                 x, y = event.pos
                 row, col = get_square_from_pos(x, y)
 
-                if selected_piece is None:
-                    piece = board[row][col]
-                    if piece != "" and ((turn == 'white' and piece[0] == 'w') or (turn == 'black' and piece[0] == 'b')):
-                        selected_piece = piece
-                        selected_pos = (row, col)
+                if quantum_mode:
+                    if not quantum_piece:
+                        if board[row][col] != "" and ((turn == 'white' and board[row][col][0] == 'w') or (turn == 'black' and board[row][col][0] == 'b')):
+                            quantum_piece = board[row][col]
+                            selected_pos = (row, col)
+                            selected_piece = board[row][col]
+
+                            valid_moves = get_possible_moves(quantum_piece, selected_pos[0], selected_pos[1])
+                            if len(valid_moves) == 1:
+                                only_pos = valid_moves[0]
+                                board[selected_pos[0]][selected_pos[1]] = ""
+                                board[only_pos[0]][only_pos[1]] = quantum_piece
+                                quantum_piece = None
+                                quantum_positions = []
+                                selected_piece = None
+                                selected_pos = None
+                                quantum_mode = False
+                                turn = 'black' if turn == 'white' else 'white'
+                    else:
+                        valid_moves = get_possible_moves(quantum_piece, selected_pos[0], selected_pos[1])
+                        if (row, col) not in quantum_positions and (row, col) in valid_moves:
+                            quantum_positions.append((row, col))
+                            board[row][col] = quantum_piece
+                            quantum_board[(row, col)] = [quantum_piece]
+                            if len(quantum_positions) == 2:
+                                board[selected_pos[0]][selected_pos[1]] = ""
+                                selected_piece = None
+                                selected_pos = None
                 else:
-                    moves = get_possible_moves(selected_piece, selected_pos[0], selected_pos[1])
-                    if (row, col) in moves:
-                        board[row][col] = selected_piece
-                        board[selected_pos[0]][selected_pos[1]] = ""
-                        turn = 'black' if turn == 'white' else 'white'
-                    selected_piece = None
-
-        # Victory check
-        all_pieces = [p for row_ in board for p in row_]
-        if "wk" not in all_pieces:
-            draw_end_message("Black wins!")
-            run = False
-        elif "bk" not in all_pieces:
-            draw_end_message("White wins!")
-            run = False
-
-        # Checkmate
-        if is_king_in_check(turn):
-            if not has_legal_moves(turn):
-                winner = 'White' if turn == 'black' else 'Black'
-                draw_end_message(f"Checkmate! {winner} wins!")
-                run = False
+                    if selected_piece is None:
+                        piece = board[row][col]
+                        if piece != "" and ((turn == 'white' and piece[0] == 'w') or (turn == 'black' and piece[0] == 'b')):
+                            selected_piece = piece
+                            selected_pos = (row, col)
+                    else:
+                        moves = get_possible_moves(selected_piece, selected_pos[0], selected_pos[1])
+                        if (row, col) in moves:
+                            board[row][col] = selected_piece
+                            board[selected_pos[0]][selected_pos[1]] = ""
+                            turn = 'black' if turn == 'white' else 'white'
+                        selected_piece = None
 
     pygame.quit()
 
